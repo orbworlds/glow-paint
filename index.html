@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Glow Paint</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0a2a; touch-action: none; user-select: none; -webkit-user-select: none; }
+  body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #efeaff; }
+  canvas { display: block; outline: none; -webkit-tap-highlight-color: transparent; cursor: crosshair; }
+  body.look canvas { cursor: grab; }
+  button { border: 0; font: inherit; color: inherit; padding: 0; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .glass { background: rgba(40,28,92,.42); backdrop-filter: blur(16px) saturate(1.5); -webkit-backdrop-filter: blur(16px) saturate(1.5);
+    border: 1px solid rgba(190,170,255,.22); box-shadow: 0 10px 34px rgba(5,0,30,.45); }
+  #bar { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; flex-wrap: wrap;
+    justify-content: center; align-items: center; gap: 8px 6px; padding: 8px 10px; border-radius: 26px; width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; }
+  .grp { display: flex; align-items: center; gap: 6px; }
+  .sw { width: 30px; height: 30px; border-radius: 50%; position: relative; transition: transform .15s; }
+  .sw::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid transparent; transition: border-color .15s; }
+  .sw.on { transform: scale(1.12); } .sw.on::after { border-color: rgba(255,255,255,.9); }
+  .tb { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; transition: background .15s; }
+  .tb:hover { background: rgba(255,255,255,.1); } .tb.on { background: rgba(255,255,255,.2); }
+  .tb svg { width: 21px; height: 21px; fill: none; stroke: #efeaff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .tb.warn { background: rgba(255,90,140,.45); }
+  #size i { display: block; border-radius: 50%; background: #efeaff; box-shadow: 0 0 8px #fff; }
+  .depth { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+  .depth svg { width: 18px; height: 18px; fill: none; stroke: #cfc4ff; stroke-width: 2; stroke-linecap: round; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 88px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.22); outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 0 10px #b9a4ff; }
+  input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 0 10px #b9a4ff; }
+  .sep { width: 1px; height: 26px; background: rgba(255,255,255,.18); }
+  #hint { position: fixed; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); padding: 9px 15px; border-radius: 16px; font-size: 13px;
+    line-height: 1.5; text-align: center; transition: opacity 1.2s; white-space: nowrap; pointer-events: none; }
+  #hint b { color: #fff; }
+  @media (max-width: 520px) { .sep { display: none; } #hint { font-size: 12px; } }
+</style>
+<script type="importmap">{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="hint" class="glass"></div>
+<div id="bar" class="glass">
+  <div class="grp" id="colors"></div>
+  <div class="sep"></div>
+  <div class="grp">
+    <button class="tb" id="size" title="Brush size"><i></i></button>
+    <label class="depth" title="Paint depth (near / far)"><svg viewBox="0 0 24 24"><circle cx="7" cy="12" r="3"/><circle cx="17" cy="12" r="1.5"/></svg><input id="depth" type="range" min="4" max="22" step="0.1"></label>
+    <button class="tb" id="undo" title="Undo"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+    <button class="tb" id="clear" title="Clear (tap twice)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+    <button class="tb" id="look" title="Look around"></button>
+    <button class="tb" id="mute" title="Sound"></button>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// === CONFIG ===
+const CONFIG = {
+  colors: ['#ff5fa8', '#ffa64d', '#ffe46e', '#5dffb2', '#4fd4ff', '#a580ff'],   // index 6 = rainbow
+  sizes: [0.045, 0.085, 0.15],          // brush radius when painting at depth 10 (scales with depth)
+  depth: { min: 4, max: 22 },
+  sky: { top: '#07051c', mid: '#170f45', horizon: '#3b1a6b', nebula: '#7a3aa8' },
+  fog: { color: '#150d3a', density: 0.03 },
+  bloom: { strength: 0.62, radius: 0.42, threshold: 0.14 },
+  glow: 1.15, shimmer: 0.16,               // stroke brightness and shimmer amount
+  stars: 1400, dust: 160,
+  storageKey: 'glow-paint-v1',
+};
+
+// === SCENE ===
+const orb = window.orb;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+Object.assign(renderer, { toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.05 });
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(CONFIG.fog.color, CONFIG.fog.density);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 500);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), CONFIG.bloom.strength, CONFIG.bloom.radius, CONFIG.bloom.threshold);
+composer.addPass(bloom); composer.addPass(new OutputPass());
+const cam = { yaw: 0, pitch: 0.05, r: 10, yawT: 0, pitchT: 0.05, rT: 10, target: new THREE.Vector3(0, 0, 0) };
+let depth = 10;
+function resize() {
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));           // fit the drawing on any screen
+  cam.rT = THREE.MathUtils.clamp(4.6 / Math.min(t, t * camera.aspect), 10, 21);
+  depth = cam.rT; if (depthInput) depthInput.value = depth;
+}
+let depthInput = null;
+addEventListener('resize', resize); resize(); cam.r = cam.rT;
+const rand = (a = 0, b = 1) => a + Math.random() * (b - a);
+function dotTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.25, 'rgba(255,255,255,.55)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+}
+const dotTex = dotTexture();
+
+// === SKY & LIGHT ===
+// Strokes are self-lit, so no lights: an indigo-violet gradient dome with a faint nebula + stars.
+const sky = new THREE.Mesh(new THREE.SphereGeometry(200, 48, 24), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { top: { value: new THREE.Color(CONFIG.sky.top) }, mid: { value: new THREE.Color(CONFIG.sky.mid) },
+    horizon: { value: new THREE.Color(CONFIG.sky.horizon) }, nebula: { value: new THREE.Color(CONFIG.sky.nebula) } },
+  vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform vec3 top, mid, horizon, nebula; varying vec3 vDir;
+    float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+    float noise(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                 mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+    void main() {
+      vec3 d = normalize(vDir); float h = d.y;
+      vec3 col = mix(horizon, mid, smoothstep(-0.35, 0.15, h)); col = mix(col, top, smoothstep(0.15, 0.85, h));
+      float n = noise(d * 2.2) * 0.6 + noise(d * 5.1) * 0.3 + noise(d * 11.0) * 0.1;
+      col += nebula * smoothstep(0.45, 0.85, n) * 0.22 * (1.0 - abs(h) * 0.6);
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+}));
+scene.add(sky);
+const starGeo = new THREE.BufferGeometry(), starPos = [], starCol = [], c0 = new THREE.Color();
+for (let i = 0; i < CONFIG.stars; i++) {
+  const v = new THREE.Vector3().randomDirection().multiplyScalar(150); starPos.push(v.x, v.y, v.z);
+  c0.setHSL(rand(0.6, 0.85), 0.5, rand(0.35, 0.85) ** 2); starCol.push(c0.r, c0.g, c0.b);
+}
+starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3)); starGeo.setAttribute('color', new THREE.Float32BufferAttribute(starCol, 3));
+const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ size: 2.2, sizeAttenuation: false, map: dotTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+scene.add(stars);
+
+// === WORLD ===
+// Floating dust motes and a faint polar grid far below give the space depth when you look around.
+const dustGeo = new THREE.BufferGeometry(), dustArr = new Float32Array(CONFIG.dust * 3);
+for (let i = 0; i < CONFIG.dust; i++) dustArr.set([rand(-12, 12), rand(-5, 7), rand(-12, 12)], i * 3);
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustArr, 3));
+scene.add(new THREE.Points(dustGeo, new THREE.PointsMaterial({ size: 0.07, map: dotTex, color: '#b9a0ff', transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })));
+const grid = new THREE.PolarGridHelper(16, 16, 8, 96, '#4b2f9a', '#33206e');
+grid.position.y = -5.2; grid.material.transparent = true; grid.material.opacity = 0.35; scene.add(grid);
+
+// Glowing strokes: tapered Catmull-Rom tubes with a white-hot core and a traveling shimmer.
+const strokeMat = new THREE.ShaderMaterial({
+  vertexColors: true,
+  uniforms: { time: { value: 0 }, glow: { value: CONFIG.glow }, shimmer: { value: CONFIG.shimmer },
+    fogColor: { value: new THREE.Color(CONFIG.fog.color) }, fogDensity: { value: CONFIG.fog.density } },
+  vertexShader: `varying vec3 vCol, vN, vV; varying float vU, vDepth;
+    void main() { vCol = color; vU = uv.x; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); vDepth = -mv.z; gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform float time, glow, shimmer, fogDensity; uniform vec3 fogColor; varying vec3 vCol, vN, vV; varying float vU, vDepth;
+    void main() {
+      float ndv = abs(dot(normalize(vN), normalize(vV)));
+      float s = 1.0 - shimmer + shimmer * sin(time * 3.0 - vU * 7.0);
+      vec3 c = vCol * (0.45 + 0.9 * pow(ndv, 1.4)) * s * glow + vec3(1.0) * pow(ndv, 8.0) * 0.3;
+      float f = 1.0 - exp(-fogDensity * fogDensity * vDepth * vDepth);
+      gl_FragColor = vec4(mix(c, fogColor, f), 1.0);
+    }`,
+});
+const strokes = [], strokeGroup = new THREE.Group(); scene.add(strokeGroup);
+const _p = new THREE.Vector3(), _c = new THREE.Color();
+function strokeColor(st, along) {
+  return st.c === 6 ? _c.setHSL((st.h + along * 0.09) % 1, 0.9, 0.62, THREE.SRGBColorSpace) : _c.set(CONFIG.colors[st.c]);
+}
+function strokeGeometry(st) {
+  const pts = []; for (let i = 0; i < st.p.length; i += 3) pts.push(new THREE.Vector3(st.p[i], st.p[i + 1], st.p[i + 2]));
+  let g, len = 0, seg = 0; const rad = 10;
+  if (pts.length < 2) g = new THREE.SphereGeometry(st.s * 1.3, 16, 12).translate(pts[0].x, pts[0].y, pts[0].z);
+  else {
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal'); len = curve.getLength();
+    seg = Math.min(700, Math.max(6, Math.round(len * 18)));
+    g = new THREE.TubeGeometry(curve, seg, st.s, rad, false);
+    const pos = g.attributes.position, uv = g.attributes.uv, end = Math.min(len * 0.4, 0.25 + st.s * 5);
+    for (let i = 0; i <= seg; i++) {
+      const u = i / seg, taper = Math.sqrt(Math.min(1, Math.min(u, 1 - u) * len / end)); curve.getPointAt(u, _p);
+      for (let j = 0; j <= rad; j++) {
+        const k = i * (rad + 1) + j;
+        pos.setXYZ(k, _p.x + (pos.getX(k) - _p.x) * taper, _p.y + (pos.getY(k) - _p.y) * taper, _p.z + (pos.getZ(k) - _p.z) * taper); uv.setX(k, u * len);
+      }
+    }
+  }
+  const n = g.attributes.position.count, col = new Float32Array(n * 3), per = pts.length < 2 ? n : rad + 1;
+  for (let k = 0; k < n; k++) { strokeColor(st, pts.length < 2 ? 0 : Math.floor(k / per) / seg * len); col.set([_c.r, _c.g, _c.b], k * 3); }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+function addStroke(st) { st.mesh = new THREE.Mesh(strokeGeometry(st), strokeMat); st.mesh.frustumCulled = false; strokeGroup.add(st.mesh); strokes.push(st); return st; }
+function rebuildStroke(st) { st.mesh.geometry.dispose(); st.mesh.geometry = strokeGeometry(st); }
+function removeStroke(st) { strokeGroup.remove(st.mesh); st.mesh.geometry.dispose(); strokes.splice(strokes.indexOf(st), 1); }
+
+// The sample drawing shown on first visit: a heart wrapped by a rainbow spiral, a moon, a wave and sparkles.
+function sampleDrawing() {
+  const S = (c, s, fn, n, h = 0) => { const p = []; for (let i = 0; i <= n; i++) { const v = fn(i / n); p.push(+v[0].toFixed(3), +v[1].toFixed(3), +v[2].toFixed(3)); } addStroke({ c, s, h, p }); };
+  const TAU = Math.PI * 2, sin = Math.sin, cos = Math.cos;
+  S(0, 0.11, (t) => { const a = t * TAU; return [0.075 * 16 * sin(a) ** 3, 0.075 * (13 * cos(a) - 5 * cos(2 * a) - 2 * cos(3 * a) - cos(4 * a)) + 0.35, 0.5 + 0.2 * sin(a * 2)]; }, 120);
+  S(6, 0.06, (t) => { const a = t * TAU * 2.6 + 0.6; return [2.9 * cos(a), -2.5 + t * 5.1, 2.9 * sin(a) * 0.9]; }, 260, 0.75);
+  S(2, 0.075, (t) => { if (t < 0.5) { const a = (0.35 + t * 2.6) * Math.PI; return [-3.0 + 0.8 * cos(a), 2.6 + 0.8 * sin(a), -1]; }
+    const b = (1.5 - (t - 0.5) * 2) * Math.PI; return [-2.62 + 0.7 * cos(b), 2.6 + 0.7 * sin(b), -1]; }, 100);
+  S(4, 0.055, (t) => { const x = -3.8 + t * 7.6; return [x, -3.25 + 0.28 * sin(x * 2.1), 0.3 * cos(x * 0.9)]; }, 120);
+  S(5, 0.05, (t) => { const a = t * TAU * 2.2, r = 0.15 + t * 0.65; return [3.0 + r * cos(a), 2.55 + r * sin(a), -0.6]; }, 90);
+  [[2.2, -1.2, 1.4, 1], [-2.4, -0.4, 1.2, 2], [1.0, 3.2, -0.4, 4], [-1.2, -2.4, 1.6, 3], [3.4, 0.6, -1.6, 2], [-3.6, 0.9, 0.2, 0]].forEach(([x, y, z, c]) => {
+    S(c, 0.03, (t) => [x + (t - 0.5) * 0.5, y, z], 6); S(c, 0.03, (t) => [x, y + (t - 0.5) * 0.5, z], 6);
+  });
+}
+
+// Sparkles at the brush tip
+const MAXP = 160, sGeo = new THREE.BufferGeometry(), sPos = new Float32Array(MAXP * 3), sCol = new Float32Array(MAXP * 3), sVel = new Float32Array(MAXP * 3), sLife = new Float32Array(MAXP), sBase = new Float32Array(MAXP * 3);
+sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3)); sGeo.setAttribute('color', new THREE.BufferAttribute(sCol, 3));
+const sparks = new THREE.Points(sGeo, new THREE.PointsMaterial({ size: 0.12, map: dotTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+sparks.frustumCulled = false; scene.add(sparks);
+let sNext = 0;
+function sparkle(p, color) {
+  const i = sNext; sNext = (sNext + 1) % MAXP; _c.set(color);
+  sPos.set([p.x, p.y, p.z], i * 3); sVel.set([rand(-0.6, 0.6), rand(-0.2, 0.9), rand(-0.6, 0.6)], i * 3); sBase.set([_c.r, _c.g, _c.b], i * 3); sLife[i] = 1;
+}
+function updateSparks(dt) {
+  for (let i = 0; i < MAXP; i++) {
+    sLife[i] = Math.max(0, sLife[i] - dt * 1.4); const f = sLife[i] ** 2;
+    for (let a = 0; a < 3; a++) { sPos[i * 3 + a] += sVel[i * 3 + a] * dt; sCol[i * 3 + a] = sBase[i * 3 + a] * f * 1.5; }
+  }
+  sGeo.attributes.position.needsUpdate = sGeo.attributes.color.needsUpdate = true;
+}
+
+// A faint "canvas" disc showing where the paint plane is (appears when depth changes)
+const ringTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d'); g.strokeStyle = 'rgba(200,180,255,.7)';
+  for (let r = 30; r <= 120; r += 30) { g.lineWidth = r === 120 ? 3 : 1; g.setLineDash(r === 120 ? [] : [3, 6]); g.beginPath(); g.arc(128, 128, r, 0, Math.PI * 2); g.stroke(); }
+  g.setLineDash([2, 6]); g.beginPath(); g.moveTo(8, 128); g.lineTo(248, 128); g.moveTo(128, 8); g.lineTo(128, 248); g.stroke();
+  return new THREE.CanvasTexture(c);
+})();
+const planeDisc = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: ringTex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+scene.add(planeDisc);
+let discT = 0;
+
+// === PLAYER / CONTROLS ===
+let color = 6, sizeIdx = 1, mode = 'paint', drawing = null, orbitDrag = false, pinch = null, idleT = 0, sway = 0, swayAmp = 1, swayPhase = 0, chimeAcc = 0;
+const el = renderer.domElement, pointers = new Map(), ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(), camDir = new THREE.Vector3();
+const cursor = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+cursor.visible = false; scene.add(cursor);
+const brushColor = () => (color === 6 ? _c.setHSL((performance.now() / 4000) % 1, 0.9, 0.62, THREE.SRGBColorSpace).getHexString() : CONFIG.colors[color].slice(1));
+function settle() { cam.yaw += sway; cam.yawT = cam.yaw; sway = 0; swayAmp = 0; swayPhase = 0; idleT = 0; }   // stop the idle sway smoothly
+function setPlane() { camera.getWorldDirection(camDir); plane.setFromNormalAndCoplanarPoint(camDir, _p.copy(camera.position).addScaledVector(camDir, depth)); }
+function hit(e, out) { ndc.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(ndc, camera); return ray.ray.intersectPlane(plane, out); }
+function beginStroke(e) {
+  settle(); camera.updateMatrixWorld(); setPlane(); if (!hit(e, _p)) return;
+  drawing = addStroke({ c: color, s: +(CONFIG.sizes[sizeIdx] * depth / 10).toFixed(3), h: Math.random(), p: [+_p.x.toFixed(3), +_p.y.toFixed(3), +_p.z.toFixed(3)] });
+  drawing.last = _p.clone(); drawing.dirty = false; chimeAcc = 1e9; hintDone();
+}
+function extendStroke(e) {
+  if (!hit(e, _p)) return;
+  const min = 0.035 * depth / 10, d = _p.distanceTo(drawing.last); if (d < min || drawing.p.length > 2400) return;
+  _p.lerpVectors(drawing.last, _p, 0.65);                                         // a little lazy-brush smoothing
+  drawing.p.push(+_p.x.toFixed(3), +_p.y.toFixed(3), +_p.z.toFixed(3)); drawing.last.copy(_p); drawing.dirty = true;
+  for (let i = 0; i < 2; i++) sparkle(_p, '#' + brushColor());
+  chimeAcc += d / depth * 10; if (chimeAcc > 0.9) { chimeAcc = 0; chime(e.clientY / innerHeight); }
+}
+function endStroke(cancel) {
+  if (!drawing) return;
+  if (cancel && drawing.p.length < 30) removeStroke(drawing); else if (drawing.dirty) rebuildStroke(drawing);
+  delete drawing.last; delete drawing.dirty; drawing = null; save();
+}
+function orbit(dx, dy) { settle(); cam.yawT -= dx * 0.006; cam.pitchT = THREE.MathUtils.clamp(cam.pitchT + dy * 0.005, -1.2, 1.2); }
+function setDepth(v) { depth = THREE.MathUtils.clamp(v, CONFIG.depth.min, CONFIG.depth.max); depthInput.value = depth; discT = 1.4; }
+const pinchInfo = () => { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) || 1 }; };
+el.addEventListener('contextmenu', (e) => e.preventDefault());
+el.addEventListener('pointerdown', (e) => {
+  el.setPointerCapture(e.pointerId); audioInit(); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) { endStroke(true); orbitDrag = false; pinch = pinchInfo(); return; }
+  if (pointers.size > 2) return;
+  if (e.button === 2 || e.button === 1 || mode === 'look') { orbitDrag = true; settle(); return; }
+  if (e.button === 0) beginStroke(e);
+});
+el.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse' && !orbitDrag && mode === 'paint') { setPlane(); cursor.visible = !!hit(e, cursor.position); }
+  const p = pointers.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+  if (pointers.size === 2 && pinch) {
+    const q = pinchInfo(); orbit(q.x - pinch.x, q.y - pinch.y);
+    if (mode === 'paint') setDepth(depth * pinch.d / q.d); else cam.rT = THREE.MathUtils.clamp(cam.rT * pinch.d / q.d, 5, 30);
+    pinch = q; return;
+  }
+  if (orbitDrag) orbit(dx, dy); else if (drawing) extendStroke(e);
+});
+const release = (e) => { pointers.delete(e.pointerId); if (drawing) endStroke(); if (!pointers.size) orbitDrag = false; if (pointers.size < 2) pinch = null; };
+el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release);
+el.addEventListener('pointerleave', () => (cursor.visible = false));
+el.addEventListener('wheel', (e) => { e.preventDefault(); if (mode === 'paint') setDepth(depth * Math.exp(e.deltaY * 0.001)); else cam.rT = THREE.MathUtils.clamp(cam.rT * Math.exp(e.deltaY * 0.001), 5, 30); }, { passive: false });
+addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); undo(); }
+  else if (/^Digit[1-7]$/.test(e.code)) pickColor(+e.code.slice(5) - 1);
+  else if (e.code === 'KeyL') toggleLook();
+});
+
+// === UI ===
+const $ = (id) => document.getElementById(id), touch = matchMedia('(pointer: coarse)').matches;
+depthInput = $('depth'); depthInput.value = depth;
+depthInput.addEventListener('input', () => setDepth(+depthInput.value));
+const swatches = [...CONFIG.colors, 'rainbow'].map((c, i) => {
+  const b = document.createElement('button'); b.className = 'sw'; b.title = i === 6 ? 'Rainbow' : 'Color';
+  b.style.background = i === 6 ? 'conic-gradient(#ff5fa8, #ffa64d, #ffe46e, #5dffb2, #4fd4ff, #a580ff, #ff5fa8)' : c;
+  b.style.boxShadow = `0 0 12px ${i === 6 ? '#c08cff' : c}`; b.onclick = () => pickColor(i); $('colors').append(b); return b;
+});
+function pickColor(i) { color = i; swatches.forEach((s, k) => s.classList.toggle('on', k === i)); cursor.material.color.set('#' + brushColor()); }
+function setSize(i) { sizeIdx = i; const px = [7, 12, 18][i]; Object.assign($('size').firstElementChild.style, { width: px + 'px', height: px + 'px' }); }
+$('size').onclick = () => setSize((sizeIdx + 1) % 3);
+function undo() { const st = strokes[strokes.length - 1]; if (st && st !== drawing) { removeStroke(st); save(); } }
+$('undo').onclick = undo;
+let clearArm = 0;
+$('clear').onclick = () => {
+  if (performance.now() - clearArm < 2500) { [...strokes].forEach(removeStroke); save(); clearArm = 0; $('clear').classList.remove('warn'); return; }
+  clearArm = performance.now(); $('clear').classList.add('warn'); setTimeout(() => $('clear').classList.remove('warn'), 2500);
+};
+const eyeSvg = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const brushSvg = '<svg viewBox="0 0 24 24"><path d="M14.5 4.5l5 5L10 19l-5 1 1-5z"/><path d="M12.5 6.5l5 5"/></svg>';
+function toggleLook() {
+  mode = mode === 'paint' ? 'look' : 'paint'; document.body.classList.toggle('look', mode === 'look'); cursor.visible = false;
+  $('look').innerHTML = mode === 'paint' ? eyeSvg : brushSvg; $('look').title = mode === 'paint' ? 'Look around' : 'Back to painting'; $('look').classList.toggle('on', mode === 'look');
+}
+$('look').onclick = toggleLook; $('look').innerHTML = eyeSvg;
+function save() { try { localStorage.setItem(CONFIG.storageKey, JSON.stringify(strokes.map(({ c, s, h, p }) => ({ c, s, h, p })))); } catch {} }
+function load() {
+  let data = null; try { data = JSON.parse(localStorage.getItem(CONFIG.storageKey)); } catch {}
+  if (!Array.isArray(data)) return sampleDrawing();
+  data.forEach((st) => { if (st && Array.isArray(st.p) && st.p.length >= 3) addStroke({ c: st.c | 0, s: +st.s || 0.08, h: +st.h || 0, p: st.p }); });
+}
+let hintGone = false;
+$('hint').innerHTML = touch ? '<b>Draw</b> with a finger · <b>two fingers</b> to turn<br><b>Pinch</b> to paint nearer or farther'
+  : '<b>Drag</b> to paint · <b>right-drag</b> to look around<br><b>Scroll</b> to paint nearer or farther';
+function hintDone() { if (hintGone) return; hintGone = true; setTimeout(() => ($('hint').style.opacity = 0), 2500); }
+setTimeout(hintDone, 6000);
+
+// Sound: a soft pentatonic chime with an echo while you draw (after the first touch)
+let actx = null, master = null, muted = false;
+try { muted = localStorage.getItem('glow-paint-muted') === '1'; } catch {}
+function audioInit() {
+  if (!actx) {
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)(); master = actx.createGain(); master.gain.value = 0.3; master.connect(actx.destination);
+      const delay = actx.createDelay(1), fb = actx.createGain(), wet = actx.createGain();
+      delay.delayTime.value = 0.32; fb.gain.value = 0.4; wet.gain.value = 0.45;
+      master.connect(delay); delay.connect(fb).connect(delay); delay.connect(wet).connect(actx.destination);
+    } catch { return; }
+  }
+  if (actx.state === 'suspended') actx.resume();
+}
+const PENTA = [0, 2, 4, 7, 9];
+function chime(yNorm) {
+  if (!actx || muted) return;
+  const idx = Math.round((1 - yNorm) * 10), f = 392 * 2 ** ((PENTA[idx % 5] + 12 * Math.floor(idx / 5)) / 12), t0 = actx.currentTime;
+  [[f, 0.1, 'sine'], [f * 2.01, 0.025, 'triangle']].forEach(([fr, v, type]) => {
+    const o = actx.createOscillator(), g = actx.createGain(); o.type = type; o.frequency.value = fr;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(v, t0 + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.4);
+    o.connect(g).connect(master); o.start(t0); o.stop(t0 + 1.5);
+  });
+}
+const muteSvg = () => `<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/>${muted ? '<path d="M16 9.5l5 5M21 9.5l-5 5"/>' : '<path d="M16 9a4.2 4.2 0 0 1 0 6M18.6 6.5a7.8 7.8 0 0 1 0 11"/>'}</svg>`;
+$('mute').innerHTML = muteSvg();
+$('mute').onclick = () => { muted = !muted; $('mute').innerHTML = muteSvg(); try { localStorage.setItem('glow-paint-muted', muted ? '1' : '0'); } catch {} };
+document.addEventListener('visibilitychange', () => { if (actx) document.hidden ? actx.suspend() : actx.resume(); });
+
+load(); pickColor(color); setSize(sizeIdx);
+setTimeout(() => orb?.capture?.(), 2500);
+
+// === LOOP ===
+const timer = new THREE.Timer(); timer.connect(document);
+let T = 0;
+renderer.setAnimationLoop((ts) => {
+  timer.update(ts); const dt = Math.min(Math.max(timer.getDelta(), 0), 1 / 20); T += dt; idleT += dt;
+  // gentle idle sway shows off the 3D drawing; it stops the moment you interact
+  if (!drawing && !orbitDrag && !pinch && idleT > 2) { swayAmp = Math.min(1, swayAmp + dt * 0.4); swayPhase += dt * 0.35; }
+  sway = Math.sin(swayPhase) * 0.32 * swayAmp;
+  const k = Math.min(1, dt * 8);
+  cam.yaw += (cam.yawT - cam.yaw) * k; cam.pitch += (cam.pitchT - cam.pitch) * k; cam.r += (cam.rT - cam.r) * Math.min(1, dt * 4);
+  camera.position.setFromSphericalCoords(cam.r, Math.PI / 2 - cam.pitch, cam.yaw + sway).add(cam.target); camera.lookAt(cam.target);
+  if (drawing?.dirty) { rebuildStroke(drawing); drawing.dirty = false; }
+  strokeMat.uniforms.time.value = T;
+  // paint-plane disc + brush cursor
+  discT = Math.max(0, discT - dt); camera.getWorldDirection(camDir);
+  planeDisc.material.opacity = Math.min(1, discT) * 0.35; planeDisc.visible = discT > 0;
+  planeDisc.position.copy(camera.position).addScaledVector(camDir, depth); planeDisc.quaternion.copy(camera.quaternion);
+  planeDisc.scale.setScalar(depth * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 0.8);
+  cursor.scale.setScalar(CONFIG.sizes[sizeIdx] * depth / 10 * 9); if (color === 6) cursor.material.color.set('#' + brushColor());
+  stars.rotation.y += dt * 0.004; updateSparks(dt);
+  for (let i = 0; i < CONFIG.dust; i++) { dustArr[i * 3 + 1] += Math.sin(T * 0.5 + i) * dt * 0.08; dustArr[i * 3] += Math.cos(T * 0.3 + i * 1.7) * dt * 0.05; }
+  dustGeo.attributes.position.needsUpdate = true;
+  composer.render();
+});
+</script>
+</body>
+</html>

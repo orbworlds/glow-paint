@@ -1,0 +1,20 @@
+{
+  "name": "glow-paint",
+  "private": true,
+  "description": "Paint ribbons of light that hang in the air, then walk around them.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://orbworlds.com/orb/glow-paint",
+  "scripts": {
+    "start": "node orb-kit/bin/orb.mjs dev .",
+    "share": "node orb-kit/bin/orb.mjs share",
+    "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "three": "^0.186.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
