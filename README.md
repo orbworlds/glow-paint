@@ -20,17 +20,18 @@ Drag to paint. L switches to looking around, Ctrl+Z undoes, and the buttons chan
 ```bash
 git clone https://github.com/orbworlds/glow-paint
 cd glow-paint
+npm install
 npm start
 ```
 
-That opens it at http://127.0.0.1:4242 with the [Orb kit](https://github.com/orbworlds/kit),
-which gives the game what it gets on Orb: other players (open a second tab, or press **+ Player**), saves and shared state.
-You need Node 20 or newer, and nothing else.
+That opens it at http://127.0.0.1:4242 with the Orb kit, which `npm install` brings,
+and which gives the game what it gets on Orb: other players (open a second tab, or press **+ Player**), saves and shared state.
+You need Node 20 or newer.
 
 The whole thing is `index.html`, 399 lines of HTML, CSS and JavaScript with
 [three.js](https://threejs.org) from a CDN. Edit it and the page reloads.
 
-What it uses from Orb's world SDK (`window.orb`, typed in [`orb-kit/orb.d.ts`](orb-kit/orb.d.ts)):
+What it uses from Orb's world SDK (`window.orb`, typed in [`orb.d.ts`](https://orbworlds.com/kit/orb.d.ts)):
 
 - plain `localStorage` for progress, which Orb saves per player and brings along to their other devices
 
